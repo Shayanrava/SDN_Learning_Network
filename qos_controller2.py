@@ -137,55 +137,68 @@ class IntelligentQoSController(object):
                 f"UDP/TCP: {udp_tcp_ratio:.2f} | Drop: {drop_rate:.4f} "
                 f"=> ML: {'⚠️ CONGESTED (1)' if prediction == 1 else '✅ NORMAL (0)'}"
             )
+            conn_s1 = core.openflow.connections.get(1)
+            conn_s8 = core.openflow.connections.get(8)
             if prediction == 1 and not self.is_mitigating:
                 log.warn("🚨 Congestion predicted! Rerouting Gaming -> Path 2 (S3-S6) & Stream -> Path 3 (S4-S7)...")
-                if 1 in core.openflow.connections:
-                    self.apply_reroute_policy(core.openflow.connections[1])
+                if conn_s1:
+                    self.apply_reroute_policy(conn_s1, conn_s8)
                 self.is_mitigating = True
             elif prediction == 0 and self.is_mitigating:
                 log.info("🟢 Traffic back to normal. Restoring all flows to Path 1 (S2-S5)...")
-                if 1 in core.openflow.connections:
-                    self.remove_reroute_policy(core.openflow.connections[1])
+                if conn_s1:
+                    self.remove_reroute_policy(conn_s1, conn_s8)
                 self.is_mitigating = False
             self.last_bytes = total_bytes
             self.last_packets = total_packets
             self.last_time = current_time
-    def apply_reroute_policy(self, connection):
+    def apply_reroute_policy(self, connection_s1, connection_s8=None):
         msg_gaming = of.ofp_flow_mod()
         msg_gaming.priority = 1000
         msg_gaming.match.dl_type = 0x0800
         msg_gaming.match.nw_proto = 17
         msg_gaming.match.tp_dst = 5000
         msg_gaming.actions.append(of.ofp_action_output(port=3))
-        connection.send(msg_gaming)
-
+        connection_s1.send(msg_gaming)
         msg_stream = of.ofp_flow_mod()
         msg_stream.priority = 1000
         msg_stream.match.dl_type = 0x0800
         msg_stream.match.nw_proto = 6
         msg_stream.match.tp_dst = 5001
         msg_stream.actions.append(of.ofp_action_output(port=4))
-        connection.send(msg_stream)
-
-    # افزودن مسیر بازگشت روی سوئیچ S8
-        if 8 in core.openflow.connections:
-            conn_s8 = core.openflow.connections[8]
+        connection_s1.send(msg_stream)
+        if connection_s8:
             msg_back_gaming = of.ofp_flow_mod()
             msg_back_gaming.priority = 1000
             msg_back_gaming.match.dl_type = 0x0800
             msg_back_gaming.match.nw_proto = 17
             msg_back_gaming.match.tp_src = 5000
             msg_back_gaming.actions.append(of.ofp_action_output(port=2))
-            conn_s8.send(msg_back_gaming)
-    log.info("Multi-Path Active: Forward & Return paths installed.")
-    def remove_reroute_policy(self, connection):
+            connection_s8.send(msg_back_gaming)
+            msg_back_live_stream = of.ofp_flow_mod()
+            msg_back_live_stream.priority = 1000
+            msg_back_live_stream.match.dl_type = 0x0800
+            msg_back_live_stream.match.nw_proto = 6
+            msg_back_live_stream.match.tp_src = 5001
+            msg_back_live_stream.actions.append(of.ofp_action_output(port=3))
+            connection_s8.send(msg_back_live_stream)
+        log.info("Multi-Path Active: Forward & Return paths installed.")
+    def remove_reroute_policy(self, connection1, connection8=None):
         for proto, port in [(17, 5000), (6, 5001)]:
             msg = of.ofp_flow_mod()
             msg.command = of.OFPFC_DELETE
             msg.match.dl_type = 0x0800
             msg.match.nw_proto = proto
             msg.match.tp_dst = port
-            connection.send(msg)
+            connection1.send(msg)
+        if connection8:
+            for proto, port in [(17, 5000), (6, 5001)]:
+                msg = of.ofp_flow_mod()
+                msg.command = of.OFPFC_DELETE
+                msg.match.dl_type = 0x0800
+                msg.match.nw_proto = proto
+                msg.match.tp_src = port
+                connection8.send(msg)
         log.info("Policy Cleared: All traffic restored to Default Path (S2-S5).")
 def launch():
     core.registerNew(IntelligentQoSController)

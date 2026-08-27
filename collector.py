@@ -34,7 +34,6 @@ class S1CriteriaCollector(object):
                 connection.send(of.ofp_stats_request(body=of.ofp_port_stats_request()))
 
     def _handle_PortStatsReceived(self, event):
-        """۱. محاسبه مجموع افت بسته‌ها (Drops) در تمامی پورت‌های سوئیچ S1"""
         if event.dpid != 1:
             return
 
